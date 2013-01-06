@@ -1,6 +1,7 @@
 #lang racket
 
 ; Racket oauth 1.0 implementation
+; Currently I only support HMAC-SHA1 signing and GET requests
 
 (require net/base64)
 (require net/uri-codec)
@@ -19,7 +20,7 @@
 (define *oauth-signature-method-key "oauth_signature_method")
 (define *oauth-signature-key "oauth_signature")
 
-(struct oauth (url version consumer-key consumer-secret signature-method nonce timestamp))
+(struct oauth (url version consumer-key consumer-secret signature-method nonce timestamp http-method))
 
 (define (normalize-params params)
   (define (param-sort-method k1v1 k2v2)
@@ -48,17 +49,13 @@
     (normalize-params (append url-params oauth-easy-params))))
 
 (define (get-sgn-base-string oauth-obj)
-  
-  (define (url-parametrize-param a-list)
-    (cons (string->symbol (first a-list)) (second a-list)))
-
   (let* 
       ((params (build-oauth-params oauth-obj))
        (supplied-url (string->url (oauth-url oauth-obj))))
     
     (string-join
      (list 
-      "GET"
+      (oauth-http-method oauth-obj)
       (uri-encode (string-join
 		   (list (url-scheme supplied-url)
 			 "://"
@@ -73,8 +70,9 @@
 (define (sign s key method)
   (define (sign-hmac-sha1 s key)
     (string-trim 
-     (format "~a"
-	     (base64-encode (HMAC-SHA1 (string->bytes/locale key) (string->bytes/locale s))))))
+     (format 
+      "~a"
+      (base64-encode (HMAC-SHA1 (string->bytes/locale key) (string->bytes/locale s))))))
 
   (define (sign-plaintext s)
     (error "NOT IMPLEMENTED YET!"))
@@ -84,5 +82,32 @@
 	((eq? method "RSA-SHA1") (error "NOT IMPLEMENTED YET!"))
 	(else (error "FUCK UP"))))
 
+(define (with-signature-params oauth-obj)
+  (normalize-params (cons
+		     `("oauth_signature" ,(sign (get-sgn-base-string oauth-obj) 
+						(string-join
+						 (list
+						  (oauth-consumer-secret oauth-obj)
+						  "&")
+						 "")
+					      (oauth-signature-method oauth-obj)))
+		     (build-oauth-params oauth-obj))))
+
+(define (build-final-url oauth-obj)
+
+  (define (url-parametrize-param a-list)
+    (cons (string->symbol (first a-list)) (second a-list)))
+
+  (let ((params (with-signature-params oauth-obj))
+	(supplied-url (string->url (oauth-url oauth-obj))))
+    (url
+     (url-scheme supplied-url)
+     (url-user supplied-url)
+     (url-host supplied-url)
+     (url-port supplied-url)
+     (url-path-absolute? supplied-url)
+     (url-path supplied-url)
+     (map url-parametrize-param params)
+     (url-fragment supplied-url))))
 
 (provide (all-defined-out))
